@@ -1,5 +1,3 @@
-results/*.png
-results/*.json
 __pycache__/
 *.pyc
 .ipynb_checkpoints/

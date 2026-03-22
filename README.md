@@ -96,6 +96,27 @@ Hardware: **RTX 5090** · dtype: `fp16` · all correctness checks pass (max\_err
 
 ---
 
+---
+
+## 端到端实测 / End-to-End Results (Qwen2.5-7B Prefill)
+
+Monkey-patched 57 RMSNorm + 28 SwiGLU instances in the live Qwen2.5-7B-Instruct model.
+Measured prefill (single forward pass) latency on RTX 5090.
+
+| seq_len | Baseline (ms) | Patched (ms) | Speedup |
+|:-------:|:-------------:|:------------:|:-------:|
+| 128  | 19.85 | 18.03 | **1.101×** |
+| 256  | 26.36 | 24.62 | **1.071×** |
+| 512  | 42.72 | 40.83 | **1.046×** |
+| 1024 | 79.07 | 76.15 | **1.038×** |
+| 2048 | 151.84 | 147.03 | **1.033×** |
+
+> **Why 3–10%, not 3–9×?** In a full forward pass, attention matmuls (Q/K/V projections + softmax) dominate compute — especially at long sequence lengths where attention is O(n²). RMSNorm and SwiGLU are the fast elementwise tail, not the bottleneck. The speedup is higher at seq=128 (elementwise ops are a larger fraction) and converges toward 1× as attention dominates at seq=2048. This is exactly what the roofline model predicts: kernel fusion eliminates overhead only for the memory-bound ops, not the compute-bound matmuls.
+
+![End-to-End](results/end_to_end.png)
+
+---
+
 ## 关键结论 / Key Findings
 
 1. **Kernel launch overhead dominates at small sizes.** PyTorch's multi-kernel approach adds 5–10 µs per op. For short sequences (RoPE at seq=512), this alone causes 8.8× slowdown independent of memory bandwidth.
@@ -151,7 +172,7 @@ For a 32-layer model like Qwen2.5-7B, that's 64 RMSNorm + 64 RoPE + 32 SwiGLU ca
 | SwiGLU Triton kernel | ✅ Done |
 | CUDA C++ versions (requires nvcc) | ⏳ Planned |
 | Fused RMSNorm + linear projection | ⏳ Planned |
-| Benchmarks inside actual Qwen2.5-7B forward pass | ⏳ Planned |
+| Benchmarks inside actual Qwen2.5-7B forward pass | ✅ Done |
 
 ---
 

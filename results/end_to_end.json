@@ -1,0 +1,42 @@
+{
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "n_layers": 28,
+  "hidden_dim": 3584,
+  "ffn_dim": 18944,
+  "patched_ops": {
+    "rmsnorm": 57,
+    "swiglu": 28
+  },
+  "results": [
+    {
+      "seq": 128,
+      "baseline_ms": 19.846592700196197,
+      "patched_ms": 18.034106599952793,
+      "speedup": 1.1005032375847301
+    },
+    {
+      "seq": 256,
+      "baseline_ms": 26.364117200137116,
+      "patched_ms": 24.624333400424803,
+      "speedup": 1.0706530313499694
+    },
+    {
+      "seq": 512,
+      "baseline_ms": 42.716233499959344,
+      "patched_ms": 40.8289886006969,
+      "speedup": 1.0462231606498875
+    },
+    {
+      "seq": 1024,
+      "baseline_ms": 79.07163819982088,
+      "patched_ms": 76.14879390021088,
+      "speedup": 1.0383833301869527
+    },
+    {
+      "seq": 2048,
+      "baseline_ms": 151.84383699961472,
+      "patched_ms": 147.0295109997096,
+      "speedup": 1.032743943492505
+    }
+  ]
+}
