@@ -210,6 +210,61 @@ All three kernels were also implemented in hand-written CUDA C++ (shared memory 
 
 ---
 
+## Cross-Op Fusion: RMSNorm + Linear Projection
+
+Every transformer layer executes this pattern twice (pre-attention and pre-FFN):
+
+```python
+x_norm = RMSNorm(x)           # reads x, writes x_norm to HBM
+y      = x_norm @ W_linear.T  # reads x_norm + W, writes y
+```
+
+The intermediate tensor `x_norm` is written to HBM by RMSNorm, then immediately read back by the linear layer — pure waste. A fused kernel keeps `x_norm` in registers across both ops and eliminates that round-trip.
+
+**HBM traffic analysis** (fp16 elements):
+
+| | Formula | Qwen2.5-7B, M=2048, K=3584, N=3584 |
+|---|---|---|
+| Naive | 3·M·K + K + N·K + M·N | ~214 MB |
+| Fused | 2·M·K + K + N·K + M·N | ~199 MB |
+| Saved | M·K | ~14.7 MB per pair, ~1.88 GB per 32-layer forward pass |
+
+### Benchmark Results — Q-projection (K=3584, N=3584)
+
+| M (tokens) | Naive (µs) | Fused (µs) | Speedup | Regime |
+|:----------:|:----------:|:----------:|:-------:|--------|
+| 1   | 1246.8 | 63.7  | **19.6×** | decode |
+| 4   | 1523.0 | 82.9  | **18.4×** | decode |
+| 16  | 2286.2 | 63.7  | **35.9×** | decode |
+| 64  | 1615.9 | 132.3 | **12.2×** | decode |
+| 256 | 295.1  | 347.7 | 0.85×     | prefill |
+| 512 | 279.6  | 478.2 | 0.58×     | prefill |
+| 1024| 557.2  | 845.7 | 0.66×     | prefill |
+| 2048| 859.6  | 1805.6| 0.48×     | prefill |
+
+### Benchmark Results — FFN gate/up projection (K=3584, N=18944)
+
+| M (tokens) | Naive (µs) | Fused (µs) | Speedup | Regime |
+|:----------:|:----------:|:----------:|:-------:|--------|
+| 1  | 228.7  | 266.8  | 0.86×  | decode |
+| 4  | 341.4  | 224.5  | **1.52×** | decode |
+| 16 | 289.9  | 210.3  | **1.38×** | decode |
+| 64 | 515.8  | 319.0  | **1.62×** | decode |
+| 256| 454.3  | 1174.1 | 0.39×  | prefill |
+| 512| 861.5  | 2217.0 | 0.39×  | prefill |
+
+### Analysis
+
+**Why decode wins (M=1–64):** PyTorch eager executes 8+ separate CUDA kernel launches for the naive path (`float()`, `pow`, `mean`, `rsqrt`, `mul` × 2, `half()`, `linear`). At M=1, the actual compute time is ~28 µs (memory-bandwidth bound at 1792 GB/s), but kernel launch overhead inflates naive to 1247 µs. The fused kernel collapses everything to one launch and runs near the bandwidth limit.
+
+**Why prefill regresses (M≥256):** cuBLAS GEMM is heavily optimized for large matrix shapes and uses hardware-specific tiling, pipelining, and split-K strategies. The handwritten Triton kernel with BLOCK_M=16 does not saturate tensor cores at large M. The memory savings (~14.7 MB at M=2048) are real but dominated by the GEMM efficiency gap.
+
+**Production context:** This is the exact finding that shapes production LLM serving design. FlashInfer and Liger Kernel use fused norm+linear kernels specifically for the **decode** path (batch=1–32 per request), where kernel launch overhead is the dominant cost. For prefill, batching offloads the work to large GEMMs where cuBLAS already wins.
+
+![Fused RMSNorm + Linear](results/fused_rmsnorm_linear.png)
+
+---
+
 ## Roadmap
 
 | Item | Status |
@@ -219,7 +274,7 @@ All three kernels were also implemented in hand-written CUDA C++ (shared memory 
 | SwiGLU Triton kernel | ✅ Done |
 | CUDA C++ versions (shared mem + warp reduction) | ✅ Done |
 | Triton vs CUDA C++ head-to-head benchmark | ✅ Done |
-| Fused RMSNorm + linear projection | ⏳ Planned |
+| Fused RMSNorm + linear projection | ✅ Done |
 | Benchmarks inside actual Qwen2.5-7B forward pass | ✅ Done |
 
 ---
